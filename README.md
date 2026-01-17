@@ -57,3 +57,8 @@ git submodule update --init --recursive
 - Always push the submodule changes first, then commit the updated pointer in each parent repo.
 - `git status` in a parent repo will show coursedata as `modified (new commits)` when the pointer needs committing.
 - To make submodules participate in common commands, you can enable: `git config --global submodule.recurse true`.
+
+## Using the VS Code UI
+- In the Source Control panel, submodules appear as nested repositories. Open `coursedata` in the panel to stage/commit/push submodule changes, then switch back to the parent repo entry and stage the `coursedata` folder to record the new pointer.
+- To pull latest submodule changes: Command Palette → `Git: Update Submodules` (or right-click the submodule in Source Control and pull), then commit the updated `coursedata` pointer in the parent repo entry.
+- When cloning, use `Git: Clone (Recursive)` or run `git clone --recurse-submodules`; if already cloned, run `Git: Update Submodules` to initialize.
