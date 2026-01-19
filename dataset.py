@@ -8,7 +8,7 @@ import keyring
 
 try:
     from edubag.albert import xls2csv
-    from edubag.albert.client import fetch_and_save_rosters
+    from edubag.albert.client import fetch_and_save_rosters, fetch_class_details
     from edubag.gmail import filter_from_roster_command
 
     EDUBAG_AVAILABLE = True
@@ -33,6 +33,9 @@ from coursedata.enrollment import (
     generate_enrollment_roster,
 )
 
+d8 = date.today().isoformat()
+
+
 app = typer.Typer()
 
 
@@ -40,6 +43,7 @@ app = typer.Typer()
 def daily():
     """Run all daily data processing steps."""
     albert_rosters()
+    albert_class_details()
     save_gmail_filters()
     enrollment_reports()
 
@@ -69,7 +73,6 @@ def albert_rosters(
         logger.error("edubag module is not available. Cannot fetch rosters.")
         raise typer.Exit(code=1)
 
-    d8 = date.today().isoformat()
     if output_dir is None:
         output_dir = RAW_DATA_DIR / "albert" / "rosters" / d8
 
@@ -117,6 +120,48 @@ def albert_rosters(
         for xls_path in tqdm(xls_path_list, desc="Converting to CSV"):
             xls2csv([xls_path], csv_output_dir)
         logger.success("Conversion to CSV complete.")
+
+
+@app.command()
+def albert_class_details(
+    output: Annotated[
+        Path | None, typer.Option(help="Output path for the class details file")
+    ] = None,
+):
+    """
+    Fetch all class details for the specified course and term, and save to output.
+    """
+    if not EDUBAG_AVAILABLE:
+        logger.error("edubag module is not available. Cannot fetch class details.")
+        raise typer.Exit(code=1)
+
+    if output is None:
+        output = PROCESSED_DATA_DIR / "albert" / "class_details" / d8 / "class_details.json"
+
+    logger.info(
+        f"Fetching class details for course '{COURSE_NAME}' in term '{TERM_NAME}' to '{output}'"
+    )
+
+    # Get credentials from environment and keychain
+    username = os.getenv("SSO_USERNAME")
+    if not username:
+        logger.warning(
+            "SSO_USERNAME not found in environment variables. Set it in your .env file."
+        )
+        username = None
+
+    password = None
+    if username:
+        password = keyring.get_password("nyu-sso", username)
+        if not password:
+            logger.warning(
+                f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
+            )
+            password = None
+
+    fetch_class_details(COURSE_NAME, TERM_NAME, output=output, username=username, password=password)
+    logger.success("Class details fetched successfully.")
+
 
 
 @app.command()
