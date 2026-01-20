@@ -24,6 +24,9 @@ if tomllib:
         _toml_data = tomllib.load(f)
         _config = _toml_data.get("tool", {}).get("coursedata", {})
 
+# Optional subsections
+LECTURE_COVERS_CONFIG = _config.get("lecture_covers", {})
+
 # Course Information
 try:
     COURSE_NAME = _config["course_name"]
