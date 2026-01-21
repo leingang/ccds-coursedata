@@ -81,6 +81,12 @@ def generate_enrollment_roster(
 
     # Track when each student first appeared
     enrollment_dates = {}
+    # Track the first date a student disappeared from the roster
+    dropped_dates = {}
+    # Keep the most recent row data per student for reuse when they drop
+    student_records: dict[str, pd.Series] = {}
+
+    previous_students: set[str] = set()
 
     # Process each roster file chronologically
     for date_str, csv_file in roster_files:
@@ -90,11 +96,19 @@ def generate_enrollment_roster(
             # Track new enrollments
             for _, row in df.iterrows():
                 campus_id = str(row["Campus ID"])
+                student_records[campus_id] = row
 
                 # Only record enrollment date if student has "Enrolled" status
                 # and hasn't been tracked yet
                 if campus_id not in enrollment_dates and row["Status"] == "Enrolled":
                     enrollment_dates[campus_id] = date_str
+            # Detect drops by comparing previous roster to current roster
+            current_students = set(str(cid) for cid in df["Campus ID"].tolist())
+            dropped_now = previous_students - current_students
+            for campus_id in dropped_now:
+                if campus_id not in dropped_dates:
+                    dropped_dates[campus_id] = date_str
+            previous_students = current_students
         except Exception as e:
             logger.error(f"Error reading {csv_file}: {e}")
             continue
@@ -104,8 +118,27 @@ def generate_enrollment_roster(
     try:
         df = pd.read_csv(most_recent_file)
 
-        # Add enrollment date column
+        # Add enrollment and dropped date columns
         df["Enrollment Date"] = df["Campus ID"].astype(str).map(enrollment_dates)
+        df["Dropped Date"] = df["Campus ID"].astype(str).map(dropped_dates)
+
+        current_ids = set(df["Campus ID"].astype(str))
+        all_ids = set(student_records.keys())
+        missing_ids = all_ids - current_ids
+
+        if missing_ids:
+            # Build rows for dropped students who are not in the most recent roster
+            extra_rows = []
+            for campus_id in missing_ids:
+                base = student_records.get(campus_id, {})
+                row_dict = {col: base.get(col, None) for col in df.columns}
+                row_dict["Campus ID"] = campus_id
+                row_dict["Status"] = "Dropped"
+                row_dict["Enrollment Date"] = enrollment_dates.get(campus_id)
+                row_dict["Dropped Date"] = dropped_dates.get(campus_id)
+                extra_rows.append(row_dict)
+            if extra_rows:
+                df = pd.concat([df, pd.DataFrame(extra_rows)], ignore_index=True)
 
         # Save the enrollment roster in date subdirectory
         current_date = date.today().isoformat()

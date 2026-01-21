@@ -45,6 +45,7 @@ def daily():
     albert_rosters()
     albert_class_details()
     save_gmail_filters()
+    enrollment_rosters()
     enrollment_reports()
 
 
@@ -165,29 +166,23 @@ def albert_class_details(
 
 
 @app.command()
-def enrollment_reports(
+def enrollment_rosters(
     rosters_dir: Annotated[
         Path | None,
         typer.Option(help="Directory containing dated roster subdirectories"),
     ] = None,
-    roster_output_dir: Annotated[
+    output_dir: Annotated[
         Path | None, typer.Option(help="Output directory for enrollment rosters")
-    ] = None,
-    report_output_dir: Annotated[
-        Path | None, typer.Option(help="Output directory for enrollment reports")
     ] = None,
 ):
     """
-    Generate enrollment rosters and reports for all sections.
+    Generate enrollment rosters for all sections.
     """
     if rosters_dir is None:
         rosters_dir = INTERIM_DATA_DIR / "albert" / "rosters"
 
-    if roster_output_dir is None:
-        roster_output_dir = PROCESSED_DATA_DIR / "enrollment"
-
-    if report_output_dir is None:
-        report_output_dir = REPORTS_DIR / "enrollment"
+    if output_dir is None:
+        output_dir = PROCESSED_DATA_DIR / "enrollment"
 
     logger.info(f"Finding roster files in {rosters_dir}")
     sections = find_roster_files(rosters_dir)
@@ -200,12 +195,42 @@ def enrollment_reports(
 
     for section_name, roster_files in sections.items():
         logger.info(f"Processing section: {section_name}")
+        generate_enrollment_roster(section_name, roster_files, output_dir)
 
-        # Generate enrollment roster
-        generate_enrollment_roster(section_name, roster_files, roster_output_dir)
+    logger.success("Enrollment roster generation complete")
 
-        # Generate enrollment report
-        generate_enrollment_report(section_name, roster_files, report_output_dir)
+
+@app.command()
+def enrollment_reports(
+    rosters_dir: Annotated[
+        Path | None,
+        typer.Option(help="Directory containing dated roster subdirectories"),
+    ] = None,
+    output_dir: Annotated[
+        Path | None, typer.Option(help="Output directory for enrollment reports")
+    ] = None,
+):
+    """
+    Generate enrollment reports for all sections.
+    """
+    if rosters_dir is None:
+        rosters_dir = INTERIM_DATA_DIR / "albert" / "rosters"
+
+    if output_dir is None:
+        output_dir = REPORTS_DIR / "enrollment"
+
+    logger.info(f"Finding roster files in {rosters_dir}")
+    sections = find_roster_files(rosters_dir)
+
+    if not sections:
+        logger.warning(f"No roster files found in {rosters_dir}")
+        return
+
+    logger.info(f"Found {len(sections)} sections")
+
+    for section_name, roster_files in sections.items():
+        logger.info(f"Processing section: {section_name}")
+        generate_enrollment_report(section_name, roster_files, output_dir)
 
     logger.success("Enrollment report generation complete")
 
