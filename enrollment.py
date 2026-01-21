@@ -140,6 +140,8 @@ def generate_enrollment_roster(
             if extra_rows:
                 df = pd.concat([df, pd.DataFrame(extra_rows)], ignore_index=True)
 
+        # Sort the final roster by last name, first name
+        df.sort_values(by=["Last Name", "First Name"], inplace=True)
         # Save the enrollment roster in date subdirectory
         current_date = date.today().isoformat()
         date_output_dir = output_dir / current_date
@@ -214,6 +216,11 @@ def generate_enrollment_report(
             for campus_id, student_info in previous_students.items():
                 if campus_id not in current_students:
                     dropped_students.append(student_info)
+
+            # Sort all lists by last name, then first name
+            new_students.sort(key=lambda x: (x[1], x[0]))
+            dropped_students.sort(key=lambda x: (x[1], x[0]))
+            withdrawn_students.sort(key=lambda x: (x[1], x[0]))
 
             # Record all dates, even if no events
             events_by_date.append(
