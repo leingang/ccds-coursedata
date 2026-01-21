@@ -23,7 +23,7 @@ from typing import Optional, Annotated, Generator
 
 from coursedata.config import (
     PROJ_ROOT,
-    PROCESSED_DATA_DIR,
+    REPORTS_DIR,
     LECTURE_COVERS_CONFIG,
 )
 
@@ -31,7 +31,6 @@ from coursedata.config import (
 app = typer.Typer()
 
 
-DEFAULT_SECTIONS = ["006", "016"]
 DEFAULT_SOURCE_TYPE = "mpl"
 
 
@@ -39,7 +38,7 @@ DEFAULT_SOURCE_TYPE = "mpl"
 class LectureCoversSettings:
     source: Path
     source_type: str
-    sections: list[str]
+    sections: list[str] | None
     output: Path
 
 
@@ -66,10 +65,9 @@ class MPLLectureScheduleParser(LectureScheduleParser):
         df = pd.read_csv(self.csv_path, header=0, dtype=str, converters={"Date": to_date})
         df.dropna(subset=["Date", "Topic", "Type"], inplace=True)
         df = df[df["Type"].str.lower() == "lecture"]
-        for i, row in df.iterrows():
-            lecture_date = datetime.fromisoformat(row["Date"])
-            lecture_topic = row["Topic"].strip()
-            lecture_number = i + 1
+        for lecture_number, row in enumerate(df.iterrows(), start=1):
+            lecture_date = datetime.fromisoformat(row[1]["Date"])
+            lecture_topic = row[1]["Topic"].strip()
             if pd.isna(lecture_date) or lecture_topic == "" or lecture_number is None:
                 logger.debug(f"Skipping row due to missing data: {row}")
                 continue
@@ -121,12 +119,13 @@ def load_lecture_covers_settings(
         raise FileNotFoundError(f"Could not find schedule CSV at {source_path}")
 
     resolved_source_type = (source_type or config_data.get("source_type") or DEFAULT_SOURCE_TYPE).lower()
-    resolved_sections = sections or config_data.get("sections") or DEFAULT_SECTIONS
-    resolved_sections = [str(section) for section in resolved_sections]
+    resolved_sections = sections or config_data.get("sections")
+    if resolved_sections is not None:
+        resolved_sections = [str(section) for section in resolved_sections]
 
     resolved_output = output or config_data.get("output")
     if resolved_output is None:
-        resolved_output = PROCESSED_DATA_DIR / "lecture_covers"
+        resolved_output = REPORTS_DIR / "covers"
     resolved_output = _resolve_path(Path(resolved_output))
 
     return LectureCoversSettings(
@@ -152,7 +151,7 @@ def get_parser(source_type: str, csv_path: Path) -> LectureScheduleParser:
 
 
 def get_pdf_filename(
-    date: datetime, lecnum: int, topic: str, section: str = None
+    date: datetime, lecnum: int, topic: str, section: str | None = None
 ) -> str:
     """Generate a sanitized filename for the lecture PDF."""
 
@@ -171,7 +170,10 @@ def get_pdf_filename(
     iso_date = date.strftime("%Y-%m-%d")
     lecnum_fmt = f"Lec{lecnum:02d}"
     sanitized_topic = sanitize_filename(topic)
-    filename = f"{iso_date} {section} {lecnum_fmt} {sanitized_topic}.pdf"
+    if section is not None:
+        filename = f"{iso_date} {section} {lecnum_fmt} {sanitized_topic}.pdf"
+    else:
+        filename = f"{iso_date} {lecnum_fmt} {sanitized_topic}.pdf"
     return filename
 
 
@@ -236,7 +238,7 @@ def make_lecture_covers(
     output: Annotated[
         Path | None,
         typer.Option(
-            help="Output directory. Defaults to pyproject.toml config or processed directory.",
+            help="Output directory. Defaults to pyproject.toml config or reports directory.",
         ),
     ] = None,
 ):
@@ -264,9 +266,19 @@ def make_lecture_covers(
         parser.parse(),
         desc="Generating lecture PDFs",
     ):
-        for section in settings.sections:
+        if settings.sections is not None:
+            for section in settings.sections:
+                pdf_filename = get_pdf_filename(
+                    lecture_date, lecture_number, lecture_topic, section=section
+                )
+                output_path = pdf_output_dir / pdf_filename
+                pdf_file = make_pdf(
+                    lecture_date, lecture_number, lecture_topic, output_path
+                )
+                pdf_files.append(pdf_file)
+        else:
             pdf_filename = get_pdf_filename(
-                lecture_date, lecture_number, lecture_topic, section=section
+                lecture_date, lecture_number, lecture_topic
             )
             output_path = pdf_output_dir / pdf_filename
             pdf_file = make_pdf(
