@@ -27,6 +27,7 @@ if tomllib:
 # Optional subsections
 LECTURE_COVERS_CONFIG = _config.get("lecture_covers", {})
 GRADESCOPE_CONFIG = _config.get("gradescope", {})
+BRIGHTSPACE_CONFIG = _config.get("brightspace", {})
 
 # Course Information
 try:

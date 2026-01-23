@@ -10,10 +10,16 @@ try:
     from edubag.albert import xls2csv
     from edubag.albert.client import fetch_and_save_rosters, fetch_class_details
     from edubag.gmail import filter_from_roster_command
-
     EDUBAG_AVAILABLE = True
 except ImportError:
     EDUBAG_AVAILABLE = False
+
+# Brightspace client availability is independent of Albert
+try:
+    import edubag.brightspace.client as brightspace_client
+    BRIGHTSPACE_AVAILABLE = True
+except ImportError:
+    BRIGHTSPACE_AVAILABLE = False
 
 from loguru import logger
 from tqdm import tqdm
@@ -26,6 +32,7 @@ from coursedata.config import (
     RAW_DATA_DIR,
     REPORTS_DIR,
     TERM_NAME,
+    BRIGHTSPACE_CONFIG,
 )
 from coursedata.enrollment import (
     find_roster_files,
@@ -47,6 +54,146 @@ def daily():
     save_gmail_filters()
     enrollment_rosters()
     enrollment_reports()
+
+
+@app.command()
+def brightspace_gradebooks(
+    output_dir: Annotated[
+        Path | None, typer.Option(help="Output directory for Brightspace gradebooks")
+    ] = None,
+    clean: Annotated[
+        bool,
+        typer.Option(
+            help="Remove existing files in output directories before fetching"
+        ),
+    ] = False,
+):
+    """
+    Fetch Brightspace gradebooks for configured courses and save to output_dir.
+    """
+    if not BRIGHTSPACE_AVAILABLE:
+        logger.error("edubag brightspace client is not available. Cannot fetch gradebooks.")
+        raise typer.Exit(code=1)
+
+    course_ids = BRIGHTSPACE_CONFIG.get("courses", [])
+    if not course_ids:
+        logger.error("No Brightspace course IDs found in configuration.")
+        raise typer.Exit(code=1)
+
+    if output_dir is None:
+        output_dir = RAW_DATA_DIR / "brightspace" / "gradebooks" / d8
+
+    # Clean output directory if requested
+    if clean and output_dir.exists():
+        logger.info(f"Cleaning output directory: {output_dir}")
+        shutil.rmtree(output_dir)
+
+    logger.info(
+        f"Fetching Brightspace gradebooks for courses {course_ids} to '{output_dir}'"
+    )
+
+    # Get credentials from environment and keychain (same as Albert)
+    username = os.getenv("SSO_USERNAME")
+    if not username:
+        logger.warning(
+            "SSO_USERNAME not found in environment variables. Set it in your .env file."
+        )
+        username = None
+
+    password = None
+    if username:
+        password = keyring.get_password("nyu-sso", username)
+        if not password:
+            logger.warning(
+                f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
+            )
+            password = None
+
+    # Authenticate once for the session
+    try:
+        brightspace_client.authenticate(username=username, password=password, headless=True)
+    except Exception as e:
+        logger.error(f"Brightspace authentication failed: {e}")
+        raise typer.Exit(code=1)
+
+    # Download gradebooks per course
+    for course in course_ids:
+        try:
+            brightspace_client.save_gradebook(course, save_dir=output_dir, headless=True)
+        except Exception as e:
+            logger.error(f"Failed to fetch gradebook for course {course}: {e}")
+            raise typer.Exit(code=1)
+    logger.success("Brightspace gradebooks fetched successfully.")
+
+
+@app.command()
+def brightspace_attendance(
+    output_dir: Annotated[
+        Path | None, typer.Option(help="Output directory for Brightspace attendance files")
+    ] = None,
+    clean: Annotated[
+        bool,
+        typer.Option(
+            help="Remove existing files in output directories before fetching"
+        ),
+    ] = False,
+):
+    """
+    Fetch Brightspace attendance files for configured courses and save to output_dir.
+    """
+    if not BRIGHTSPACE_AVAILABLE:
+        logger.error("edubag brightspace client is not available. Cannot fetch attendance.")
+        raise typer.Exit(code=1)
+
+    course_ids = BRIGHTSPACE_CONFIG.get("courses", [])
+    if not course_ids:
+        logger.error("No Brightspace course IDs found in configuration.")
+        raise typer.Exit(code=1)
+
+    if output_dir is None:
+        output_dir = RAW_DATA_DIR / "brightspace" / "attendance" / d8
+
+    # Clean output directory if requested
+    if clean and output_dir.exists():
+        logger.info(f"Cleaning output directory: {output_dir}")
+        shutil.rmtree(output_dir)
+
+    logger.info(
+        f"Fetching Brightspace attendance for courses {course_ids} to '{output_dir}'"
+    )
+
+    # Get credentials from environment and keychain (same as Albert)
+    username = os.getenv("SSO_USERNAME")
+    if not username:
+        logger.warning(
+            "SSO_USERNAME not found in environment variables. Set it in your .env file."
+        )
+        username = None
+
+    password = None
+    if username:
+        password = keyring.get_password("nyu-sso", username)
+        if not password:
+            logger.warning(
+                f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
+            )
+            password = None
+
+    # Authenticate once for the session
+    try:
+        brightspace_client.authenticate(username=username, password=password, headless=True)
+    except Exception as e:
+        logger.error(f"Brightspace authentication failed: {e}")
+        raise typer.Exit(code=1)
+
+    # Download attendance per course
+    for course in course_ids:
+        try:
+            brightspace_client.save_attendance(course, save_dir=output_dir, headless=True)
+        except Exception as e:
+            logger.error(f"Failed to fetch attendance for course {course}: {e}")
+            raise typer.Exit(code=1)
+    logger.success("Brightspace attendance fetched successfully.")
 
 
 @app.command()
