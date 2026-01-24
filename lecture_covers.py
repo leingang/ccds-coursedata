@@ -4,6 +4,8 @@ Generate lecture cover PDFs from a CSV schedule file.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
+import json
 import pandas as pd
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
@@ -27,10 +29,17 @@ from coursedata.config import (
     REPORTS_DIR,
     LECTURE_COVERS_CONFIG,
     TERM_NAME,
+    PROCESSED_DATA_DIR,
 )
 
 
 app = typer.Typer()
+
+
+class MeetingPattern(Enum):
+    """Enumeration for lecture meeting patterns."""
+    MW = "Monday/Wednesday"
+    TR = "Tuesday/Thursday" 
 
 
 DEFAULT_SOURCE_TYPE = "mpl"
@@ -42,6 +51,7 @@ class LectureCoversSettings:
     source_type: str
     sections: list[str] | None
     output: Path
+    meeting_pattern: MeetingPattern | None = None
 
 
 class LectureScheduleParser(ABC):
@@ -77,7 +87,32 @@ class MPLLectureScheduleParser(LectureScheduleParser):
 
 
 class JuliusLectureScheduleParser(LectureScheduleParser):
+    def __init__(self, csv_path: Path, meeting_pattern: MeetingPattern | None = None):
+        super().__init__(csv_path)
+        self.meeting_pattern = meeting_pattern
+        if self.meeting_pattern is None:
+            raise ValueError(
+                "meeting_pattern is required for JuliusLectureScheduleParser. "
+                "Must be MeetingPattern.MW or MeetingPattern.TR."
+            )
+        if not isinstance(self.meeting_pattern, MeetingPattern):
+            raise ValueError(
+                f"Invalid meeting_pattern. Must be MeetingPattern enum value."
+            )
+
     def parse(self) -> Generator[tuple[datetime, int, str], None, None]:
+        # Column indices depend on meeting pattern
+        # Date is always in column 2
+        # TR (Tuesday/Thursday): Class # in column 7, Topic in column 8
+        # MW (Monday/Wednesday): Class # in column 4, Topic in column 5
+        date_col = "Date"
+        if self.meeting_pattern == MeetingPattern.TR:
+            class_num_col = "Class #.1"
+            topic_col = "Topic.1"
+        else:  # MW
+            class_num_col = "Class #"
+            topic_col = "Topic"
+        
         def to_date(date_str: str) -> datetime | None:
             # Extract year from TERM_NAME (e.g., "Spring 2026" -> 2026)
             year_str = TERM_NAME.split()[-1]
@@ -90,14 +125,22 @@ class JuliusLectureScheduleParser(LectureScheduleParser):
                 logger.debug(f"Error parsing date '{date_str}': {e}")
                 return None
 
-        df = pd.read_csv(self.csv_path, header=2, dtype=str, converters={"Date": to_date})
-        df.dropna(subset=["Date", "Topic", "Class #"], inplace=True)
+        df = pd.read_csv(self.csv_path, header=2, dtype=str)
+        # Apply date conversion
+        df[date_col] = df[date_col].apply(to_date)
+        df.dropna(subset=[date_col, topic_col, class_num_col], inplace=True)
+        
         for _, row in df.iterrows():
-            lecture_date = datetime.fromisoformat(row["Date"])
-            lecture_topic = row["Topic"].strip()
-            lecture_number = int(row["Class #"].strip())
+            lecture_date = row[date_col]
+            lecture_topic = row[topic_col].strip()
+            try:
+                lecture_number = int(row[class_num_col].strip())
+            except (ValueError, TypeError):
+                logger.debug(f"Could not parse class number: {row[class_num_col]}")
+                continue
+            
             if pd.isna(lecture_date) or lecture_topic == "" or lecture_number is None:
-                logger.debug(f"Skipping row due to missing data: {row}")
+                logger.debug(f"Skipping row due to missing data")
                 continue
             yield (lecture_date, lecture_number, lecture_topic)
 
@@ -105,6 +148,48 @@ class JuliusLectureScheduleParser(LectureScheduleParser):
 def _resolve_path(path: Path) -> Path:
     resolved = path if path.is_absolute() else PROJ_ROOT / path
     return resolved.resolve()
+
+
+def get_meeting_pattern_for_section(section: str) -> MeetingPattern:
+    """Get meeting pattern for a section from class_details.json.
+    
+    Args:
+        section: Section number as a string (e.g., "011", "016")
+    
+    Returns:
+        MeetingPattern.TR for Tuesday/Thursday sections, MeetingPattern.MW for Monday/Wednesday sections
+    """
+    # Find the most recent class_details.json file
+    class_details_dir = PROCESSED_DATA_DIR / "albert" / "class_details"
+    if not class_details_dir.exists():
+        raise FileNotFoundError(f"Class details directory not found: {class_details_dir}")
+    
+    # Get the most recent date directory
+    date_dirs = sorted([d for d in class_details_dir.iterdir() if d.is_dir()], reverse=True)
+    if not date_dirs:
+        raise FileNotFoundError(f"No class details found in {class_details_dir}")
+    
+    class_details_file = date_dirs[0] / "class_details.json"
+    if not class_details_file.exists():
+        raise FileNotFoundError(f"Class details file not found: {class_details_file}")
+    
+    # Load class details and find matching section
+    with open(class_details_file, 'r') as f:
+        class_details = json.load(f)
+    
+    for class_detail in class_details:
+        if class_detail.get("section") == section:
+            days_and_times = class_detail.get("days_and_times", "")
+            if days_and_times.startswith("TuTh"):
+                return MeetingPattern.TR
+            elif days_and_times.startswith("MoWe"):
+                return MeetingPattern.MW
+            else:
+                raise ValueError(
+                    f"Unexpected meeting pattern for section {section}: {days_and_times}"
+                )
+    
+    raise ValueError(f"Section {section} not found in class details")
 
 
 # Map of parser types to parser classes
@@ -143,20 +228,40 @@ def load_lecture_covers_settings(
     if resolved_sections is not None:
         resolved_sections = [str(section) for section in resolved_sections]
 
+    # For julius parser, sections are required
+    if resolved_source_type == "julius" and not resolved_sections:
+        raise ValueError(
+            "sections are required for julius parser. Specify via --sections option or in "
+            "pyproject.toml [tool.coursedata.lecture_covers] section."
+        )
+
     resolved_output = output or config_data.get("output")
     if resolved_output is None:
         resolved_output = REPORTS_DIR / "covers"
     resolved_output = _resolve_path(Path(resolved_output))
+
+    # Load meeting pattern if configured
+    resolved_meeting_pattern = None
+    if "meeting_pattern" in config_data:
+        pattern_str = config_data.get("meeting_pattern").upper()
+        try:
+            resolved_meeting_pattern = MeetingPattern[pattern_str]
+        except KeyError:
+            raise ValueError(
+                f"Invalid meeting_pattern '{pattern_str}' in pyproject.toml. "
+                f"Must be 'MW' or 'TR'."
+            )
 
     return LectureCoversSettings(
         source=source_path,
         source_type=resolved_source_type,
         sections=resolved_sections,
         output=resolved_output,
+        meeting_pattern=resolved_meeting_pattern,
     )
 
 
-def get_parser(source_type: str, csv_path: Path) -> LectureScheduleParser:
+def get_parser(source_type: str, csv_path: Path, meeting_pattern: MeetingPattern | None = None) -> LectureScheduleParser:
     try:
         parser_cls = PARSER_MAP[source_type]
     except KeyError as exc:
@@ -164,6 +269,15 @@ def get_parser(source_type: str, csv_path: Path) -> LectureScheduleParser:
         raise ValueError(
             f"Unsupported source_type '{source_type}'. Choose from: {available_types}."
         ) from exc
+    
+    # JuliusLectureScheduleParser requires meeting pattern information
+    if parser_cls == JuliusLectureScheduleParser:
+        if meeting_pattern is None:
+            raise ValueError(
+                "meeting_pattern parameter is required for julius parser. Must be MeetingPattern.MW or MeetingPattern.TR."
+            )
+        return parser_cls(csv_path, meeting_pattern=meeting_pattern)
+    
     return parser_cls(csv_path)
 
 
@@ -269,7 +383,6 @@ def make_lecture_covers(
         sections=sections,
         output=output,
     )
-    parser = get_parser(settings.source_type, settings.source)
 
     pdf_output_dir = settings.output
     if pdf_output_dir.exists():
@@ -280,12 +393,21 @@ def make_lecture_covers(
     pdf_output_dir.mkdir(parents=True, exist_ok=True)
 
     pdf_files = []
-    for lecture_date, lecture_number, lecture_topic in tqdm(
-        parser.parse(),
-        desc="Generating lecture PDFs",
-    ):
-        if settings.sections is not None:
-            for section in settings.sections:
+    
+    # For julius parser, iterate over sections; each section has its own meeting pattern
+    if settings.source_type == "julius":
+        for section in settings.sections:
+            # Use configured meeting pattern if available, otherwise look it up from class details
+            if settings.meeting_pattern is not None:
+                meeting_pattern = settings.meeting_pattern
+            else:
+                meeting_pattern = get_meeting_pattern_for_section(section)
+            
+            parser = get_parser(settings.source_type, settings.source, meeting_pattern=meeting_pattern)
+            for lecture_date, lecture_number, lecture_topic in tqdm(
+                parser.parse(),
+                desc=f"Generating lecture PDFs for section {section}",
+            ):
                 pdf_filename = get_pdf_filename(
                     lecture_date, lecture_number, lecture_topic, section=section
                 )
@@ -294,15 +416,32 @@ def make_lecture_covers(
                     lecture_date, lecture_number, lecture_topic, output_path
                 )
                 pdf_files.append(pdf_file)
-        else:
-            pdf_filename = get_pdf_filename(
-                lecture_date, lecture_number, lecture_topic
-            )
-            output_path = pdf_output_dir / pdf_filename
-            pdf_file = make_pdf(
-                lecture_date, lecture_number, lecture_topic, output_path
-            )
-            pdf_files.append(pdf_file)
+    else:
+        # For other parsers, parse once and generate for all sections (or no sections)
+        parser = get_parser(settings.source_type, settings.source)
+        for lecture_date, lecture_number, lecture_topic in tqdm(
+            parser.parse(),
+            desc="Generating lecture PDFs",
+        ):
+            if settings.sections is not None:
+                for section in settings.sections:
+                    pdf_filename = get_pdf_filename(
+                        lecture_date, lecture_number, lecture_topic, section=section
+                    )
+                    output_path = pdf_output_dir / pdf_filename
+                    pdf_file = make_pdf(
+                        lecture_date, lecture_number, lecture_topic, output_path
+                    )
+                    pdf_files.append(pdf_file)
+            else:
+                pdf_filename = get_pdf_filename(
+                    lecture_date, lecture_number, lecture_topic
+                )
+                output_path = pdf_output_dir / pdf_filename
+                pdf_file = make_pdf(
+                    lecture_date, lecture_number, lecture_topic, output_path
+                )
+                pdf_files.append(pdf_file)
 
     logger.info(f"PDFs written to: {settings.output}")
     logger.info(f"Generated {len(pdf_files)} lecture PDFs.")
