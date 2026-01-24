@@ -19,12 +19,14 @@ from pathlib import Path
 from loguru import logger
 from tqdm import tqdm
 import typer
+import click
 from typing import Optional, Annotated, Generator
 
 from coursedata.config import (
     PROJ_ROOT,
     REPORTS_DIR,
     LECTURE_COVERS_CONFIG,
+    TERM_NAME,
 )
 
 
@@ -77,9 +79,11 @@ class MPLLectureScheduleParser(LectureScheduleParser):
 class JuliusLectureScheduleParser(LectureScheduleParser):
     def parse(self) -> Generator[tuple[datetime, int, str], None, None]:
         def to_date(date_str: str) -> datetime | None:
+            # Extract year from TERM_NAME (e.g., "Spring 2026" -> 2026)
+            year_str = TERM_NAME.split()[-1]
             date_str = date_str.strip().replace("\xa0", " ")
             try:
-                return datetime.strptime(date_str + ", 2025", "%B %d, %Y").replace(
+                return datetime.strptime(date_str + f", {year_str}", "%B %d, %Y").replace(
                     hour=8, minute=0, second=0, microsecond=0
                 )
             except ValueError as e:
@@ -103,6 +107,13 @@ def _resolve_path(path: Path) -> Path:
     return resolved.resolve()
 
 
+# Map of parser types to parser classes
+PARSER_MAP: dict[str, type[LectureScheduleParser]] = {
+    "mpl": MPLLectureScheduleParser,
+    "julius": JuliusLectureScheduleParser,
+}
+
+
 def load_lecture_covers_settings(
     source: Optional[Path],
     source_type: Optional[str],
@@ -118,7 +129,16 @@ def load_lecture_covers_settings(
     if not source_path.exists():
         raise FileNotFoundError(f"Could not find schedule CSV at {source_path}")
 
-    resolved_source_type = (source_type or config_data.get("source_type") or DEFAULT_SOURCE_TYPE).lower()
+    # Determine source_type - required parameter
+    resolved_source_type = source_type or config_data.get("source_type")
+    if not resolved_source_type:
+        available_types = ", ".join(f"'{t}'" for t in PARSER_MAP.keys())
+        raise ValueError(
+            f"source_type is required. Specify it via --source-type option or in pyproject.toml "
+            f"[tool.coursedata.lecture_covers] section. Options: {available_types}."
+        )
+    resolved_source_type = resolved_source_type.lower()
+    
     resolved_sections = sections or config_data.get("sections")
     if resolved_sections is not None:
         resolved_sections = [str(section) for section in resolved_sections]
@@ -137,15 +157,12 @@ def load_lecture_covers_settings(
 
 
 def get_parser(source_type: str, csv_path: Path) -> LectureScheduleParser:
-    parser_map: dict[str, type[LectureScheduleParser]] = {
-        "mpl": MPLLectureScheduleParser,
-        "julius": JuliusLectureScheduleParser,
-    }
     try:
-        parser_cls = parser_map[source_type]
+        parser_cls = PARSER_MAP[source_type]
     except KeyError as exc:
+        available_types = ", ".join(f"'{t}'" for t in PARSER_MAP.keys())
         raise ValueError(
-            f"Unsupported source_type '{source_type}'. Choose from: {', '.join(parser_map.keys())}."
+            f"Unsupported source_type '{source_type}'. Choose from: {available_types}."
         ) from exc
     return parser_cls(csv_path)
 
@@ -228,7 +245,8 @@ def make_lecture_covers(
     source_type: Annotated[
         Optional[str],
         typer.Option(
-            help="Parser to use for input CSV file: 'mpl' or 'julius'. Defaults to pyproject.toml config.",
+            help="Parser to use for input CSV file.",
+            click_type=click.Choice(list(PARSER_MAP.keys()), case_sensitive=False),
             show_default=False,
         ),
     ] = None,
