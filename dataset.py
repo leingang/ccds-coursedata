@@ -3,13 +3,18 @@ from pathlib import Path
 import os
 import shutil
 from typing import Annotated, Optional
-
 import keyring
 
 try:
     from edubag.albert import xls2csv
-    from edubag.albert.client import fetch_and_save_rosters, fetch_class_details
+    from edubag.albert.client import (
+        fetch_and_save_rosters,
+        fetch_class_details as fetch_albert_class_details,
+    )
     from edubag.gmail import filter_from_roster_command
+    from edubag.gradescope.client import (
+        fetch_class_details as fetch_gradescope_class_details,
+    )
     EDUBAG_AVAILABLE = True
 except ImportError:
     EDUBAG_AVAILABLE = False
@@ -236,7 +241,6 @@ def albert_rosters(
         if convert_to_csv and csv_output_dir is not None and csv_output_dir.exists():
             logger.info(f"Cleaning CSV output directory: {csv_output_dir}")
             shutil.rmtree(csv_output_dir)
-
     logger.info(
         f"Fetching rosters for course '{COURSE_NAME}' in term '{TERM_NAME}' to '{output_dir}'"
     )
@@ -284,7 +288,7 @@ def albert_class_details(
         raise typer.Exit(code=1)
 
     if output is None:
-        output = PROCESSED_DATA_DIR / "albert" / "class_details" / d8 / "class_details.json"
+        output = RAW_DATA_DIR / "albert" / "class_details" / d8 / "class_details.json"
 
     logger.info(
         f"Fetching class details for course '{COURSE_NAME}' in term '{TERM_NAME}' to '{output}'"
@@ -307,8 +311,55 @@ def albert_class_details(
             )
             password = None
 
-    fetch_class_details(COURSE_NAME, TERM_NAME, output=output, username=username, password=password)
+    fetch_albert_class_details(
+        COURSE_NAME, TERM_NAME, output=output, username=username, password=password
+    )
     logger.success("Class details fetched successfully.")
+
+
+@app.command()
+def gradescope_class_details(
+    output: Annotated[
+        Path | None, typer.Option(help="Output path for the class details file")
+    ] = None,
+):
+    """
+    Fetch all Gradescope class details for the specified course and term, and save to output.
+    """
+    if not EDUBAG_AVAILABLE:
+        logger.error(
+            "edubag module is not available. Cannot fetch Gradescope class details."
+        )
+        raise typer.Exit(code=1)
+
+    if output is None:
+        output = RAW_DATA_DIR / "gradescope" / "class_details" / "class_details.json"
+
+    logger.info(
+        f"Fetching Gradescope class details for course '{COURSE_NAME}' in term '{TERM_NAME}' to '{output}'"
+    )
+
+    # Get credentials from environment and keychain
+    username = os.getenv("SSO_USERNAME")
+    if not username:
+        logger.warning(
+            "SSO_USERNAME not found in environment variables. Set it in your .env file."
+        )
+        username = None
+
+    password = None
+    if username:
+        password = keyring.get_password("nyu-sso", username)
+        if not password:
+            logger.warning(
+                f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
+            )
+            password = None
+
+    fetch_gradescope_class_details(
+        COURSE_NAME, TERM_NAME, output=output, username=username, password=password
+    )
+    logger.success("Gradescope class details fetched successfully.")
 
 
 
