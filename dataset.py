@@ -37,6 +37,7 @@ from coursedata.config import (
     RAW_DATA_DIR,
     REPORTS_DIR,
     TERM_NAME,
+    GRADESCOPE_CONFIG,
     BRIGHTSPACE_CONFIG,
 )
 from coursedata.enrollment import (
@@ -56,6 +57,7 @@ def daily():
     """Run all daily data processing steps."""
     albert_rosters()
     albert_class_details()
+    gradescope_rosters()
     save_gmail_filters()
     enrollment_rosters()
     enrollment_reports()
@@ -340,16 +342,16 @@ def gradescope_class_details(
     )
 
     # Get credentials from environment and keychain
-    username = os.getenv("SSO_USERNAME")
+    username = os.getenv("GRADESCOPE_USERNAME")
     if not username:
         logger.warning(
-            "SSO_USERNAME not found in environment variables. Set it in your .env file."
+            "GRADESCOPE_USERNAME not found in environment variables. Set it in your .env file."
         )
         username = None
 
     password = None
     if username:
-        password = keyring.get_password("nyu-sso", username)
+        password = keyring.get_password("gradescope.com", username)
         if not password:
             logger.warning(
                 f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
@@ -361,6 +363,81 @@ def gradescope_class_details(
     )
     logger.success("Gradescope class details fetched successfully.")
 
+
+@app.command()
+def gradescope_rosters(
+    output_dir: Annotated[
+        Path | None, typer.Option(help="Output directory for Gradescope rosters")
+    ] = None,
+    clean: Annotated[
+        bool,
+        typer.Option(
+            help="Remove existing files in output directories before fetching"
+        ),
+    ] = False,
+):
+    """
+    Fetch Gradescope rosters for configured courses and save to output_dir.
+    """
+    if not EDUBAG_AVAILABLE:
+        logger.error("edubag module is not available. Cannot fetch Gradescope rosters.")
+        raise typer.Exit(code=1)
+
+    course_ids = GRADESCOPE_CONFIG.get("courses", [])
+    if not course_ids:
+        logger.error("No Gradescope course IDs found in configuration.")
+        raise typer.Exit(code=1)
+
+    if output_dir is None:
+        output_dir = RAW_DATA_DIR / "gradescope" / "rosters" / d8
+
+    # Clean output directory if requested
+    if clean and output_dir.exists():
+        logger.info(f"Cleaning output directory: {output_dir}")
+        shutil.rmtree(output_dir)
+
+    logger.info(
+        f"Fetching Gradescope rosters for courses {course_ids} to '{output_dir}'"
+    )
+
+    # Get credentials from environment and keychain (same pattern as Albert/Brightspace)
+    username = os.getenv("GRADESCOPE_USERNAME")
+    if not username:
+        logger.warning(
+            "GRADESCOPE_USERNAME not found in environment variables. Set it in your .env file."
+        )
+        username = None
+
+    password = None
+    if username:
+        password = keyring.get_password("gradescope.com", username)
+        if not password:
+            logger.warning(
+                f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
+            )
+            password = None
+
+    # Import and authenticate Gradescope client
+    try:
+        import edubag.gradescope.client as gradescope_client
+    except Exception as e:
+        logger.error(f"Failed to import Gradescope client: {e}")
+        raise typer.Exit(code=1)
+
+    try:
+        gradescope_client.authenticate(username=username, password=password, headless=True)
+    except Exception as e:
+        logger.error(f"Gradescope authentication failed: {e}")
+        raise typer.Exit(code=1)
+
+    # Download rosters per course
+    for course in course_ids:
+        try:
+            gradescope_client.save_roster(course, save_dir=output_dir, headless=True)
+        except Exception as e:
+            logger.error(f"Failed to fetch roster for course {course}: {e}")
+            raise typer.Exit(code=1)
+    logger.success("Gradescope rosters fetched successfully.")
 
 
 @app.command()
