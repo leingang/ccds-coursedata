@@ -6,7 +6,7 @@ from loguru import logger
 import typer
 
 try:
-    from edubag.gradescope.client import sync_roster
+    from edubag.gradescope.client import GradescopeClient
     EDUBAG_AVAILABLE = True
 except ImportError:
     EDUBAG_AVAILABLE = False
@@ -74,7 +74,8 @@ def sync_gradescope_rosters(
         try:
             logger.info(f"Syncing Gradescope roster for course {cid}...")
             # edubag handles auth internally via env/keyring; no kwargs
-            sync_roster(cid)
+            client = GradescopeClient()
+            client.sync_roster(cid)
             logger.success(f"Roster synced for course {cid}")
             success += 1
         except Exception as e:

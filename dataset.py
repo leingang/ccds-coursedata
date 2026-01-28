@@ -7,21 +7,16 @@ import keyring
 
 try:
     from edubag.albert import xls2csv
-    from edubag.albert.client import (
-        fetch_and_save_rosters,
-        fetch_class_details as fetch_albert_class_details,
-    )
+    from edubag.albert.client import AlbertClient
     from edubag.gmail import filter_from_roster_command
-    from edubag.gradescope.client import (
-        fetch_class_details as fetch_gradescope_class_details,
-    )
+    from edubag.gradescope.client import GradescopeClient
     EDUBAG_AVAILABLE = True
 except ImportError:
     EDUBAG_AVAILABLE = False
 
 # Brightspace client availability is independent of Albert
 try:
-    import edubag.brightspace.client as brightspace_client
+    from edubag.brightspace.client import BrightspaceClient
     BRIGHTSPACE_AVAILABLE = True
 except ImportError:
     BRIGHTSPACE_AVAILABLE = False
@@ -118,7 +113,8 @@ def brightspace_gradebooks(
 
     # Authenticate once for the session
     try:
-        brightspace_client.authenticate(username=username, password=password, headless=True)
+        client = BrightspaceClient()
+        client.authenticate(username=username, password=password, headless=True)
     except Exception as e:
         logger.error(f"Brightspace authentication failed: {e}")
         raise typer.Exit(code=1)
@@ -126,7 +122,7 @@ def brightspace_gradebooks(
     # Download gradebooks per course
     for course in course_ids:
         try:
-            brightspace_client.save_gradebook(course, save_dir=output_dir, headless=True)
+            client.save_gradebook(course, save_dir=output_dir, headless=True)
         except Exception as e:
             logger.error(f"Failed to fetch gradebook for course {course}: {e}")
             raise typer.Exit(code=1)
@@ -188,7 +184,8 @@ def brightspace_attendance(
 
     # Authenticate once for the session
     try:
-        brightspace_client.authenticate(username=username, password=password, headless=True)
+        client = BrightspaceClient()
+        client.authenticate(username=username, password=password, headless=True)
     except Exception as e:
         logger.error(f"Brightspace authentication failed: {e}")
         raise typer.Exit(code=1)
@@ -196,7 +193,7 @@ def brightspace_attendance(
     # Download attendance per course
     for course in course_ids:
         try:
-            brightspace_client.save_attendance(course, save_dir=output_dir, headless=True)
+            client.save_attendance(course, save_dir=output_dir, headless=True)
         except Exception as e:
             logger.error(f"Failed to fetch attendance for course {course}: {e}")
             raise typer.Exit(code=1)
@@ -264,7 +261,8 @@ def albert_rosters(
             )
             password = None
 
-    xls_path_list = fetch_and_save_rosters(
+    client = AlbertClient()
+    xls_path_list = client.fetch_and_save_rosters(
         COURSE_NAME, TERM_NAME, output_dir, username=username, password=password
     )
     logger.success("Rosters fetched successfully.")
@@ -313,7 +311,8 @@ def albert_class_details(
             )
             password = None
 
-    fetch_albert_class_details(
+    client = AlbertClient()
+    client.fetch_class_details(
         COURSE_NAME, TERM_NAME, output=output, username=username, password=password
     )
     logger.success("Class details fetched successfully.")
@@ -358,7 +357,8 @@ def gradescope_class_details(
             )
             password = None
 
-    fetch_gradescope_class_details(
+    client = GradescopeClient()
+    client.fetch_class_details(
         COURSE_NAME, TERM_NAME, output=output, username=username, password=password
     )
     logger.success("Gradescope class details fetched successfully.")
