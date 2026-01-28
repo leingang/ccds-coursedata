@@ -2,6 +2,7 @@ from datetime import date
 from pathlib import Path
 import os
 import shutil
+import subprocess
 from typing import Annotated, Optional
 import keyring
 
@@ -42,6 +43,30 @@ from coursedata.enrollment import (
 )
 
 d8 = date.today().isoformat()
+
+
+def get_password(service: str, username: str) -> Optional[str]:
+    """
+    Get password from macOS Keychain.
+    
+    First tries to retrieve as an internet password (more common for web services),
+    then falls back to generic password if not found.
+    """
+    # Try internet password first
+    try:
+        result = subprocess.run(
+            ["security", "find-internet-password", "-s", service, "-a", username, "-w"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    
+    # Fall back to generic password
+    return keyring.get_password(service, username)
 
 
 app = typer.Typer()
@@ -104,7 +129,7 @@ def brightspace_gradebooks(
 
     password = None
     if username:
-        password = keyring.get_password("nyu-sso", username)
+        password = get_password("nyu-sso", username)
         if not password:
             logger.warning(
                 f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
@@ -175,7 +200,7 @@ def brightspace_attendance(
 
     password = None
     if username:
-        password = keyring.get_password("nyu-sso", username)
+        password = get_password("nyu-sso", username)
         if not password:
             logger.warning(
                 f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
@@ -254,7 +279,7 @@ def albert_rosters(
 
     password = None
     if username:
-        password = keyring.get_password("nyu-sso", username)
+        password = get_password("nyu-sso", username)
         if not password:
             logger.warning(
                 f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
@@ -304,7 +329,7 @@ def albert_class_details(
 
     password = None
     if username:
-        password = keyring.get_password("nyu-sso", username)
+        password = get_password("nyu-sso", username)
         if not password:
             logger.warning(
                 f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
@@ -350,10 +375,10 @@ def gradescope_class_details(
 
     password = None
     if username:
-        password = keyring.get_password("gradescope.com", username)
+        password = get_password("gradescope.com", username)
         if not password:
             logger.warning(
-                f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
+                f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s gradescope.com -a {username} -w YOUR_PASSWORD"
             )
             password = None
 
@@ -410,22 +435,17 @@ def gradescope_rosters(
 
     password = None
     if username:
-        password = keyring.get_password("gradescope.com", username)
+        password = get_password("gradescope.com", username)
         if not password:
             logger.warning(
-                f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s nyu-sso -a {username} -w YOUR_PASSWORD"
+                f"Password for user '{username}' not found in macOS Keychain. Store it with: security add-generic-password -s gradescope.com -a {username} -w YOUR_PASSWORD"
             )
             password = None
 
-    # Import and authenticate Gradescope client
+    # Authenticate and download rosters
     try:
-        import edubag.gradescope.client as gradescope_client
-    except Exception as e:
-        logger.error(f"Failed to import Gradescope client: {e}")
-        raise typer.Exit(code=1)
-
-    try:
-        gradescope_client.authenticate(username=username, password=password, headless=True)
+        client = GradescopeClient()
+        client.authenticate(username=username, password=password, headless=True)
     except Exception as e:
         logger.error(f"Gradescope authentication failed: {e}")
         raise typer.Exit(code=1)
@@ -433,7 +453,7 @@ def gradescope_rosters(
     # Download rosters per course
     for course in course_ids:
         try:
-            gradescope_client.save_roster(course, save_dir=output_dir, headless=True)
+            client.save_roster(course, save_dir=output_dir, headless=True)
         except Exception as e:
             logger.error(f"Failed to fetch roster for course {course}: {e}")
             raise typer.Exit(code=1)
