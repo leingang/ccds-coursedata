@@ -94,6 +94,13 @@ def brightspace_gradebooks(
             help="Remove existing files in output directories before fetching"
         ),
     ] = False,
+    headless: Annotated[
+        bool,
+        typer.Option(
+            "--headless/--headed",
+            help="Run browser headless (for automation) or headed (for debugging)",
+        ),
+    ] = False,
 ):
     """
     Fetch Brightspace gradebooks for configured courses and save to output_dir.
@@ -139,7 +146,7 @@ def brightspace_gradebooks(
     # Authenticate once for the session
     try:
         client = BrightspaceClient()
-        client.authenticate(username=username, password=password, headless=True)
+        client.authenticate(username=username, password=password, headless=headless)
     except Exception as e:
         logger.error(f"Brightspace authentication failed: {e}")
         raise typer.Exit(code=1)
@@ -147,7 +154,7 @@ def brightspace_gradebooks(
     # Download gradebooks per course
     for course in course_ids:
         try:
-            client.save_gradebook(course, save_dir=output_dir, headless=True)
+            client.save_gradebook(course, save_dir=output_dir, headless=headless)
         except Exception as e:
             logger.error(f"Failed to fetch gradebook for course {course}: {e}")
             raise typer.Exit(code=1)
