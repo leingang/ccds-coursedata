@@ -104,7 +104,12 @@ def _add_sections_to_roster(roster_path: Path, gradebook_path: Path, output_path
         output_csv=output_path,
     )
     # The function returns the output path or None
-    return output_path if result is None else Path(result)
+    if result is None:
+        return output_path
+    # Handle case where result is a list (extract first element)
+    if isinstance(result, list):
+        return Path(result[0]) if result else output_path
+    return Path(result)
 
 
 def _find_latest_gradebook(save_dir: Path) -> Optional[Path]:
