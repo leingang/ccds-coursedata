@@ -4,6 +4,7 @@ from typing import Annotated, Optional
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from urllib.parse import urlparse
@@ -87,38 +88,23 @@ def _call_with_headless(func, *args, headless: bool = False, **kwargs):
 
 
 def _add_sections_to_roster(roster_path: Path, gradebook_path: Path, output_path: Path) -> Path:
-    def _coerce_result(value) -> Path:
-        if value is None:
-            return output_path
-        if isinstance(value, (list, tuple)):
-            if not value:
-                return output_path
-            return Path(value[0])
-        return Path(value)
-
-    try:
-        result = add_sections_to_roster_from_brightspace(
-            roster_csv=roster_path,
-            brightspace_csv=gradebook_path,
-        )
-        return _coerce_result(result)
-    except TypeError:
-        try:
-            result = add_sections_to_roster_from_brightspace(
-                roster_path, gradebook_path, output_path
-            )
-            return _coerce_result(result)
-        except TypeError:
-            try:
-                result = add_sections_to_roster_from_brightspace(
-                    roster_path, gradebook_path, output_path
-                )
-                return _coerce_result(result)
-            except TypeError:
-                result = add_sections_to_roster_from_brightspace(
-                    roster_path, gradebook_path
-                )
-                return _coerce_result(result)
+    """Add section information to roster from Brightspace gradebook.
+    
+    Args:
+        roster_path: Path to Gradescope roster CSV
+        gradebook_path: Path to Brightspace gradebook CSV
+        output_path: Path where output should be saved
+        
+    Returns:
+        Path to the output file with sections added
+    """
+    result = add_sections_to_roster_from_brightspace(
+        roster_csv=roster_path,
+        brightspace_csv=gradebook_path,
+        output_csv=output_path,
+    )
+    # The function returns the output path or None
+    return output_path if result is None else Path(result)
 
 
 def _find_latest_gradebook(save_dir: Path) -> Optional[Path]:
@@ -445,6 +431,18 @@ def sync_gradescope_sections(
         )
         if roster_with_sections is None:
             roster_with_sections = output_path
+        else:
+            roster_with_sections = Path(roster_with_sections)
+            if roster_with_sections.resolve() != output_path.resolve():
+                try:
+                    shutil.copy2(roster_with_sections, output_path)
+                    roster_with_sections = output_path
+                except Exception as e:
+                    logger.error(
+                        "Failed to copy roster-with-sections to processed directory: "
+                        f"{output_path}. Error: {e}"
+                    )
+                    raise typer.Exit(code=1)
 
         _call_with_headless(
             gradescope_client.send_roster,
